@@ -1,0 +1,31 @@
+# Python / build output
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.a
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Local settings / credentials
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+.DS_Store
+
+# Large or machine-local experiment artifacts
+/results/raw/
+/experiments/worktrees/
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.pt
+*.pth
+*.safetensors
