@@ -2,7 +2,7 @@
 
 从基本的 tiled GEMM 出发，逐步读懂原始 Marlin，在 **RTX 5090 Laptop GPU** 上建立可复现的基线，再基于测量结果优化，后续在 **RTX 5090 Desktop** 上验证和调整。
 
-本项目以算子学习和实验为主。**2026-10-12 本地实测：原始 Marlin 在 RTX 5090 Laptop 上编译、安装和导入成功，但正确性测试触发 CUDA 非法指令错误，尚未成功运行。** 本次仅测试可运行性，未运行性能 benchmark，未建立基线。详见[本地测试记录](results/2026-10-12-5090-laptop-local-test.md)。
+本项目以算子学习和实验为主。**2026-10-14 已将本机非法指令错误定位到 CUDA 13.0.88 的 `ptxas` 对 cache-hint 搬运路径的优化代码生成问题。** 原始构建仍失败；只移除 cache hint 的隔离副本已通过 35 个有效上游计算用例。未运行性能 benchmark，未建立基线。详见[根因定位记录](results/2026-10-14-cache-hint-root-cause.md)及[首次测试记录](results/2026-10-12-5090-laptop-local-test.md)。
 
 ## 1. 学习对象与目标
 
@@ -36,7 +36,7 @@ dive-into-marlin/
 └── results/                  # 可提交的实验报告；raw/ 保存本地原始数据
 ```
 
-当前已保存一份本地可运行性测试记录，尚无自定义 benchmark 或优化实现。后续新增工具和实验时再扩展，避免预先搭建复杂框架。
+当前已保存本地可运行性测试和根因记录，以及一个包含复现程序和最小绕过补丁的兼容性实验。尚无自定义 benchmark 或性能优化实现。
 
 ## 3. 获取项目与原始源码
 
@@ -71,7 +71,16 @@ git -C third_party/marlin rev-parse HEAD
 
 ## 5. 在 5090 Laptop 上建立基线
 
-### 当前本地测试结果（2026-10-12，仅可运行性）
+### 当前诊断结论（2026-10-14）
+
+原始内核的 PTX 包含 cache policy 定义，但本机优化后的 SASS 在相应 `LDGSTS` 指令中出现未初始化寄存器引用。两个单变量对照支持定位到 `ptxas` 代码生成路径：
+
+- **保留原始源码和 cache hint，仅关闭 ptxas 优化**（`-Xptxas=-O0`）：纯 CUDA 复现程序计算正确。
+- **保留默认编译优化，仅移除 `cp_async4_stream` 中的 cache hint**：原始测试的 35 个有效计算用例全部通过。
+
+上游源码和 `.venv` 中的原始安装保持不变，兼容性副本通过命令级 `PYTHONPATH` 选用。此结果不是性能结论；具体证据、测试边界及[复现步骤](experiments/001-cache-hint-codegen/README.md)见[根因记录](results/2026-10-14-cache-hint-root-cause.md)。
+
+### 原始版本本地测试结果（2026-10-12，仅可运行性）
 
 | 项目 | 实测结果 |
 | --- | --- |
@@ -83,7 +92,7 @@ git -C third_party/marlin rev-parse HEAD
 | 原始测试 | `test.py -v`：6 个测试方法，4 个 ERROR；另 2 个为异常检查和提前返回的 Llama 测试 |
 | 独立复测 | 4 个正常计算测试方法分别在新进程中运行，均在首个用例触发 `CUDA error: an illegal instruction was encountered` |
 
-错误在 `marlin.mul(...)` 后的 `torch.cuda.synchronize()` 抛出，未完成输出误差检查。当前只能确认上述环境与构建方式下运行失败，尚未定位根因，也不能据此断言所有 5090 环境均不支持 Marlin。上游源码和固定提交保持不变。
+错误在 `marlin.mul(...)` 后的 `torch.cuda.synchronize()` 抛出，未完成输出误差检查。当日尚未定位根因；后续定位和兼容性对照见上节。该失败结果不能用于断言所有 5090 环境均不支持 Marlin。上游源码和固定提交保持不变。
 
 测试安装在项目 `.venv` 中，使用 `--system-site-packages` 复用现有环境的 PyTorch 等依赖；没有升级原环境依赖。当前机器可复测：
 
@@ -93,7 +102,7 @@ git -C third_party/marlin rev-parse HEAD
 CUDA_LAUNCH_BLOCKING=1 .venv/bin/python -u third_party/marlin/test.py Test.test_groups -v
 ```
 
-完整构建命令、失败 shape 和测试局限见[测试记录](results/2026-10-12-5090-laptop-local-test.md)。后续应先定位运行失败原因，再考虑建立基线。
+完整构建命令、失败 shape 和测试局限见[测试记录](results/2026-10-12-5090-laptop-local-test.md)。后续建立基线前，应明确记录是否使用兼容性补丁及其构建配置。
 
 ### 5.1 先确定环境，再编译
 
@@ -153,7 +162,7 @@ Desktop 阶段重新采集设备信息、运行原始或同一适配基线，再
 - [x] 创建项目结构，引入并固定官方 Marlin 源码。
 - [ ] 完成接口、权重布局、Tensor Core、流水线和归约笔记。
 - [x] 完成 5090 Laptop 本地可运行性测试并记录结果（编译成功，运行失败）。
-- [ ] 在 5090 Laptop 上通过正确性验证，解决当前非法指令错误。
+- [x] 定位本机非法指令原因，验证最小绕过补丁通过 35 个有效上游计算用例。
 - [ ] 完成 5090 benchmark 适配，保存首份可复现基线。
 - [ ] 完成瓶颈分析与至少一项经过验证的优化实验。
 - [ ] 在 5090 Desktop 上复测并总结可迁移性。
